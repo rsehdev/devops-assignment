@@ -1,0 +1,96 @@
+name: Deploy Website to S3 + CloudFront
+
+# Runs automatically on every push to the main branch
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+# Required for OIDC: lets the workflow request a short-lived token to assume the AWS role
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ap-south-1
+  # TODO: set these two in GitHub -> Settings -> Secrets and variables -> Actions
+  #   S3_BUCKET             (Variable or Secret) e.g. my-devops-assignment-site
+  #   CLOUDFRONT_DIST_ID    (Variable or Secret) e.g. E1ABCDEF2GHIJK
+
+jobs:
+  # ---------- 1. TEST ----------
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate required files exist
+        run: |
+          test -f index.html
+          test -f style.css
+          test -f script.js
+          echo "All required files present."
+
+      - name: Basic HTML sanity check
+        run: |
+          grep -q "DevOps Training" index.html
+          grep -q "CI/CD Deployment Successful" index.html
+          echo "HTML content check passed."
+
+  # ---------- 2. BUILD / PACKAGE ----------
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Inject build metadata
+        run: |
+          BUILD_TIME="$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          SHORT_SHA="${GITHUB_SHA::7}"
+          sed -i "s|__BUILD_TIME__|${BUILD_TIME}|g" script.js
+          sed -i "s|__COMMIT__|${SHORT_SHA}|g" script.js
+          echo "Injected build time ${BUILD_TIME} and commit ${SHORT_SHA}."
+
+      - name: Package site artifact
+        run: |
+          mkdir -p dist
+          cp index.html style.css script.js dist/
+          echo "Packaged site into dist/."
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: site
+          path: dist/
+
+  # ---------- 3. DEPLOY ----------
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: site
+          path: dist
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::378970971926:role/github-actions-deploy
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Sync files to S3
+        run: |
+          aws s3 sync dist/ "s3://${{ vars.S3_BUCKET }}" --delete
+          echo "Synced site to s3://${{ vars.S3_BUCKET }}"
+
+      - name: Invalidate CloudFront cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id "${{ vars.CLOUDFRONT_DIST_ID }}" \
+            --paths "/*"
+          echo "CloudFront cache invalidated."
