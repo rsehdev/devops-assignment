@@ -6,9 +6,7 @@ on:
     branches: [main]
   workflow_dispatch: {}
 
-# Required for OIDC: lets the workflow request a short-lived token to assume the AWS role
 permissions:
-  id-token: write
   contents: read
 
 env:
@@ -77,10 +75,11 @@ jobs:
           name: site
           path: dist
 
-      - name: Configure AWS credentials (OIDC)
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::378970971926:role/github-actions-deploy
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Sync files to S3
